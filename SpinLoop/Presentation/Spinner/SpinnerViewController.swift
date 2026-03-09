@@ -10,15 +10,28 @@ import UIKit
 final class SpinnerViewController: UIViewController {
 
     private let spinnerView: UIImageView = {
-        let iv = UIImageView(image: UIImage(named: "Spinner")) // Assets에 spinner 이미지 추가
+        let iv = UIImageView(image: UIImage(named: "Spinner5")) // Assets에 spinner 이미지 추가
         iv.contentMode = .scaleAspectFit
         iv.isUserInteractionEnabled = true
         return iv
     }()
+    
+    private let speedLabel: UILabel = {
+        let label = UILabel()
+        label.text = "0.00 RPM"
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.textAlignment = .center
+        
+        return label
+    }()
 
     // Physics-ish state
     private var angle: CGFloat = 0            // radians
-    private var omega: CGFloat = 0            // rad/s
+    private var omega: CGFloat = 0 {
+        didSet {
+            updateSpeedLabel()
+        }
+    }
 
     // Tuning
     private let drag: CGFloat = 3.0           // 1/s (클수록 빨리 멈춤)
@@ -38,11 +51,22 @@ final class SpinnerViewController: UIViewController {
         view.backgroundColor = .systemBackground
 
         view.addSubview(spinnerView)
+        view.addSubview(speedLabel)
+        
+        let fontSize = view.frame.width * 0.1
+        speedLabel.font = .systemFont(ofSize: fontSize, weight: .bold)
+        
         spinnerView.translatesAutoresizingMaskIntoConstraints = false
+        
         NSLayoutConstraint.activate([
+            speedLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            speedLabel.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+            speedLabel.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: 16),
+            speedLabel.heightAnchor.constraint(equalToConstant: 100),
+            
             spinnerView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             spinnerView.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            spinnerView.widthAnchor.constraint(equalToConstant: 260),
+            spinnerView.widthAnchor.constraint(equalToConstant: view.frame.width * 0.8),
             spinnerView.heightAnchor.constraint(equalTo: spinnerView.widthAnchor)
         ])
 
@@ -146,5 +170,10 @@ final class SpinnerViewController: UIViewController {
 
     private func clamp(_ x: CGFloat, _ a: CGFloat, _ b: CGFloat) -> CGFloat {
         min(max(x, a), b)
+    }
+    
+    private func updateSpeedLabel() {
+        let rpm = Double(omega) * 60.0 / (2.0 * .pi)
+        speedLabel.text = String(format: "%.2f RPM", abs(rpm))
     }
 }

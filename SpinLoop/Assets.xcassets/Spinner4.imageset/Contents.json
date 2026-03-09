@@ -1,17 +1,17 @@
 {
   "images" : [
     {
-      "filename" : "image_ca39bfd1-6cd6-4dae-9e49-048d319d1706 1.svg",
+      "filename" : "spinner 1.svg",
       "idiom" : "universal",
       "scale" : "1x"
     },
     {
-      "filename" : "image_ca39bfd1-6cd6-4dae-9e49-048d319d1706.svg",
+      "filename" : "spinner.svg",
       "idiom" : "universal",
       "scale" : "2x"
     },
     {
-      "filename" : "image_ca39bfd1-6cd6-4dae-9e49-048d319d1706 2.svg",
+      "filename" : "spinner 2.svg",
       "idiom" : "universal",
       "scale" : "3x"
     }
