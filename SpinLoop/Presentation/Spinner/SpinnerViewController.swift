@@ -10,7 +10,7 @@ import UIKit
 final class SpinnerViewController: UIViewController {
 
     private let spinnerView: UIImageView = {
-        let iv = UIImageView(image: UIImage(named: "Spinner5")) // Assets에 spinner 이미지 추가
+        let iv = UIImageView(image: UIImage(named: "Spinner5"))
         iv.contentMode = .scaleAspectFit
         iv.isUserInteractionEnabled = true
         return iv
@@ -21,12 +21,12 @@ final class SpinnerViewController: UIViewController {
         label.text = "0.00 RPM"
         label.translatesAutoresizingMaskIntoConstraints = false
         label.textAlignment = .center
-        
         return label
     }()
 
     // Physics-ish state
-    private var angle: CGFloat = 0            // radians
+    private var angle: CGFloat = 0
+    // 회전 속도
     private var omega: CGFloat = 0 {
         didSet {
             updateSpeedLabel()
@@ -34,9 +34,13 @@ final class SpinnerViewController: UIViewController {
     }
 
     // Tuning
-    private let drag: CGFloat = 3.0           // 1/s (클수록 빨리 멈춤)
-    private let maxOmega: CGFloat = 40.0      // rad/s (과속 방지)
-    private let omegaSmoothing: CGFloat = 0.25 // 0~1 (측정치 반영 비율)
+    private let drag: CGFloat = 3.0
+    private let maxOmega: CGFloat = 40.0
+    private let omegaSmoothing: CGFloat = 0.25
+
+    // Shake tuning
+    private let shakeOmegaBoost: CGFloat = 18.0   // 흔들 때 추가 회전 속도
+    private let shakeRandomDirection = false
 
     // Gesture tracking
     private var isDragging = false
@@ -46,39 +50,75 @@ final class SpinnerViewController: UIViewController {
     // Animation loop
     private var displayLink: CADisplayLink?
 
+    override var canBecomeFirstResponder: Bool {
+        true
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
 
         view.addSubview(spinnerView)
         view.addSubview(speedLabel)
-        
-        let fontSize = view.frame.width * 0.1
-        speedLabel.font = .systemFont(ofSize: fontSize, weight: .bold)
-        
+
+        // transform 회전 시 앵커 포인트가 뷰 정중앙에 고정되도록 명시합니다.
+        spinnerView.layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
         spinnerView.translatesAutoresizingMaskIntoConstraints = false
         
         NSLayoutConstraint.activate([
             speedLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             speedLabel.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
-            speedLabel.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: 16),
+            speedLabel.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
             speedLabel.heightAnchor.constraint(equalToConstant: 100),
             
             spinnerView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             spinnerView.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            spinnerView.widthAnchor.constraint(equalToConstant: view.frame.width * 0.8),
+            spinnerView.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.8),
             spinnerView.heightAnchor.constraint(equalTo: spinnerView.widthAnchor)
         ])
 
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
-//        spinnerView.addGestureRecognizer(pan)
         view.addGestureRecognizer(pan)
 
+        updateLabelFont()
         startDisplayLink()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        becomeFirstResponder()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        updateLabelFont()
+        fixAnchorPoint()
     }
 
     deinit {
         displayLink?.invalidate()
+    }
+
+    // MARK: - Motion (Shake)
+
+    override func motionEnded(_ motion: UIEvent.EventSubtype, with event: UIEvent?) {
+        super.motionEnded(motion, with: event)
+
+        guard motion == .motionShake else { return }
+        applyShakeSpin()
+    }
+
+    private func applyShakeSpin() {
+        let direction: CGFloat
+        
+        if shakeRandomDirection {
+            direction = Bool.random() ? 1 : -1
+        } else {
+            direction = 1
+        }
+
+        omega += shakeOmegaBoost * direction
+        omega = clamp(omega, -maxOmega, maxOmega)
     }
 
     // MARK: - Gesture
@@ -88,39 +128,35 @@ final class SpinnerViewController: UIViewController {
         let point = gr.location(in: view)
         let center = spinnerView.center
 
-        // 중심과 너무 가까우면 계산이 튈 수 있으니 최소 거리 제한
         let dx = point.x - center.x
         let dy = point.y - center.y
-        let r2 = dx*dx + dy*dy
-        if r2 < 25 { return } // 반경 5px 이내 무시(원하면 조정)
+        let r2 = dx * dx + dy * dy
 
-        let touchAngle = atan2(dy, dx) // -π ~ π
+        // 중심 너무 가까우면 무시
+        if r2 < 25 {
+            return
+        }
+
+        let touchAngle = atan2(dy, dx)
 
         switch gr.state {
         case .began:
             isDragging = true
             lastTouchAngle = touchAngle
             lastTime = now
-            // 드래그 시작 시 기존 관성은 유지할 수도, 리셋할 수도 있음
-            // omega = 0
 
         case .changed:
             let dt = max(now - lastTime, 1.0 / 240.0)
 
-            // 각도 변화량(unwrap 처리)
             var dTheta = touchAngle - lastTouchAngle
             if dTheta > .pi { dTheta -= 2 * .pi }
             if dTheta < -.pi { dTheta += 2 * .pi }
 
-            // 즉시 회전 반영
             angle += dTheta
             applyRotation(angle)
 
-            // 측정 각속도 -> 스무딩 적용
             let measuredOmega = CGFloat(dTheta) / CGFloat(dt)
             omega = omega * (1 - omegaSmoothing) + measuredOmega * omegaSmoothing
-
-            // 과속 방지
             omega = clamp(omega, -maxOmega, maxOmega)
 
             lastTouchAngle = touchAngle
@@ -128,7 +164,6 @@ final class SpinnerViewController: UIViewController {
 
         case .ended, .cancelled, .failed:
             isDragging = false
-            // 손 떼면 displayLink에서 omega를 감쇠시키며 계속 회전
 
         default:
             break
@@ -144,19 +179,16 @@ final class SpinnerViewController: UIViewController {
     }
 
     @objc private func tick(_ link: CADisplayLink) {
-        // 드래그 중이면 이미 handlePan에서 각도 업데이트하므로 여기선 "관성"만 처리
         guard !isDragging else { return }
 
         let dt = CGFloat(link.targetTimestamp - link.timestamp)
         if dt <= 0 { return }
 
-        // 충분히 느리면 정지 처리
         if abs(omega) < 0.02 {
             omega = 0
             return
         }
 
-        // 감쇠(지수 감쇠) + 각도 업데이트
         omega *= exp(-drag * dt)
         angle += omega * dt
         applyRotation(angle)
@@ -168,6 +200,15 @@ final class SpinnerViewController: UIViewController {
         spinnerView.transform = CGAffineTransform(rotationAngle: radians)
     }
 
+    /// anchorPoint 가 CGAffineTransform 적용 후 밀리지 않도록 중앙(0.5, 0.5)으로 고정합니다.
+    private func fixAnchorPoint() {
+        let layer = spinnerView.layer
+        guard layer.anchorPoint != CGPoint(x: 0.5, y: 0.5) else { return }
+        let oldOrigin = layer.frame.origin
+        layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        layer.frame.origin = oldOrigin
+    }
+
     private func clamp(_ x: CGFloat, _ a: CGFloat, _ b: CGFloat) -> CGFloat {
         min(max(x, a), b)
     }
@@ -175,5 +216,10 @@ final class SpinnerViewController: UIViewController {
     private func updateSpeedLabel() {
         let rpm = Double(omega) * 60.0 / (2.0 * .pi)
         speedLabel.text = String(format: "%.2f RPM", abs(rpm))
+    }
+
+    private func updateLabelFont() {
+        let fontSize = max(24, view.bounds.width * 0.1)
+        speedLabel.font = .systemFont(ofSize: fontSize, weight: .bold)
     }
 }
