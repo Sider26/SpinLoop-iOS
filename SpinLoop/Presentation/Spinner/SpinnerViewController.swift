@@ -8,38 +8,18 @@
 import UIKit
 
 final class SpinnerViewController: UIViewController {
-
-    private let spinnerView: UIImageView = {
-        let iv = UIImageView(image: UIImage(named: "Spinner5"))
-        iv.contentMode = .scaleAspectFit
-        iv.isUserInteractionEnabled = true
-        return iv
-    }()
-    
-    private let speedLabel: UILabel = {
-        let label = UILabel()
-        label.text = "0.00 RPM"
-        label.translatesAutoresizingMaskIntoConstraints = false
-        label.textAlignment = .center
-        return label
-    }()
+    private let contentView = SpinnerView()
+    private let physics = SpinnerPhysicsConfiguration.default
+    private lazy var feedbackController = SpinnerFeedbackController(maxOmega: physics.maxOmega)
 
     // Physics-ish state
     private var angle: CGFloat = 0
-    // 회전 속도
     private var omega: CGFloat = 0 {
         didSet {
             updateSpeedLabel()
         }
     }
 
-    // Tuning
-    private let drag: CGFloat = 3.0
-    private let maxOmega: CGFloat = 40.0
-    private let omegaSmoothing: CGFloat = 0.25
-
-    // Shake tuning
-    private let shakeOmegaBoost: CGFloat = 18.0   // 흔들 때 추가 회전 속도
     private let shakeRandomDirection = false
 
     // Gesture tracking
@@ -54,49 +34,34 @@ final class SpinnerViewController: UIViewController {
         true
     }
 
+    override func loadView() {
+        view = contentView
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemBackground
-
-        view.addSubview(spinnerView)
-        view.addSubview(speedLabel)
-
-        // transform 회전 시 앵커 포인트가 뷰 정중앙에 고정되도록 명시합니다.
-        spinnerView.layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
-        spinnerView.translatesAutoresizingMaskIntoConstraints = false
-        
-        NSLayoutConstraint.activate([
-            speedLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            speedLabel.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
-            speedLabel.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
-            speedLabel.heightAnchor.constraint(equalToConstant: 100),
-            
-            spinnerView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            spinnerView.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            spinnerView.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.8),
-            spinnerView.heightAnchor.constraint(equalTo: spinnerView.widthAnchor)
-        ])
 
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         view.addGestureRecognizer(pan)
 
-        updateLabelFont()
+        feedbackController.prepare()
         startDisplayLink()
     }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         becomeFirstResponder()
-    }
-
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        updateLabelFont()
-        fixAnchorPoint()
+        feedbackController.prepare()
     }
 
     deinit {
         displayLink?.invalidate()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        omega = 0
+        feedbackController.reset()
     }
 
     // MARK: - Motion (Shake)
@@ -117,8 +82,8 @@ final class SpinnerViewController: UIViewController {
             direction = 1
         }
 
-        omega += shakeOmegaBoost * direction
-        omega = clamp(omega, -maxOmega, maxOmega)
+        omega += physics.shakeOmegaBoost * direction
+        omega = clampedOmega(omega)
     }
 
     // MARK: - Gesture
@@ -126,14 +91,13 @@ final class SpinnerViewController: UIViewController {
     @objc private func handlePan(_ gr: UIPanGestureRecognizer) {
         let now = CACurrentMediaTime()
         let point = gr.location(in: view)
-        let center = spinnerView.center
+        let center = contentView.spinnerCenter
 
         let dx = point.x - center.x
         let dy = point.y - center.y
         let r2 = dx * dx + dy * dy
 
-        // 중심 너무 가까우면 무시
-        if r2 < 25 {
+        if r2 < physics.ignoresTouchesWithinRadiusSquared {
             return
         }
 
@@ -156,8 +120,9 @@ final class SpinnerViewController: UIViewController {
             applyRotation(angle)
 
             let measuredOmega = CGFloat(dTheta) / CGFloat(dt)
-            omega = omega * (1 - omegaSmoothing) + measuredOmega * omegaSmoothing
-            omega = clamp(omega, -maxOmega, maxOmega)
+            omega = omega * (1 - physics.omegaSmoothing) + measuredOmega * physics.omegaSmoothing
+            omega = clampedOmega(omega)
+            feedbackController.consumeRotation(abs(dTheta), omega: omega, timestamp: now)
 
             lastTouchAngle = touchAngle
             lastTime = now
@@ -189,37 +154,29 @@ final class SpinnerViewController: UIViewController {
             return
         }
 
-        omega *= exp(-drag * dt)
-        angle += omega * dt
+        omega *= exp(-physics.drag * dt)
+        let deltaAngle = omega * dt
+        angle += deltaAngle
         applyRotation(angle)
+        feedbackController.consumeRotation(abs(deltaAngle), omega: omega, timestamp: link.targetTimestamp)
     }
 
     // MARK: - Helpers
 
     private func applyRotation(_ radians: CGFloat) {
-        spinnerView.transform = CGAffineTransform(rotationAngle: radians)
-    }
-
-    /// anchorPoint 가 CGAffineTransform 적용 후 밀리지 않도록 중앙(0.5, 0.5)으로 고정합니다.
-    private func fixAnchorPoint() {
-        let layer = spinnerView.layer
-        guard layer.anchorPoint != CGPoint(x: 0.5, y: 0.5) else { return }
-        let oldOrigin = layer.frame.origin
-        layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
-        layer.frame.origin = oldOrigin
+        contentView.applyRotation(radians)
     }
 
     private func clamp(_ x: CGFloat, _ a: CGFloat, _ b: CGFloat) -> CGFloat {
         min(max(x, a), b)
     }
+
+    private func clampedOmega(_ value: CGFloat) -> CGFloat {
+        clamp(value, -physics.maxOmega, physics.maxOmega)
+    }
     
     private func updateSpeedLabel() {
         let rpm = Double(omega) * 60.0 / (2.0 * .pi)
-        speedLabel.text = String(format: "%.2f RPM", abs(rpm))
-    }
-
-    private func updateLabelFont() {
-        let fontSize = max(24, view.bounds.width * 0.1)
-        speedLabel.font = .systemFont(ofSize: fontSize, weight: .bold)
+        contentView.updateSpeed(rpm: rpm)
     }
 }
