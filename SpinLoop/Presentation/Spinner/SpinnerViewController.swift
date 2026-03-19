@@ -10,6 +10,7 @@ import UIKit
 final class SpinnerViewController: UIViewController {
     private let contentView = SpinnerView()
     private let physics = SpinnerPhysicsConfiguration.default
+    private lazy var feedbackController = SpinnerFeedbackController(maxOmega: physics.maxOmega)
 
     // Physics-ish state
     private var angle: CGFloat = 0
@@ -43,12 +44,14 @@ final class SpinnerViewController: UIViewController {
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         view.addGestureRecognizer(pan)
 
+        feedbackController.prepare()
         startDisplayLink()
     }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         becomeFirstResponder()
+        feedbackController.prepare()
     }
 
     deinit {
@@ -58,6 +61,7 @@ final class SpinnerViewController: UIViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         omega = 0
+        feedbackController.reset()
     }
 
     // MARK: - Motion (Shake)
@@ -118,6 +122,7 @@ final class SpinnerViewController: UIViewController {
             let measuredOmega = CGFloat(dTheta) / CGFloat(dt)
             omega = omega * (1 - physics.omegaSmoothing) + measuredOmega * physics.omegaSmoothing
             omega = clampedOmega(omega)
+            feedbackController.consumeRotation(abs(dTheta), omega: omega, timestamp: now)
 
             lastTouchAngle = touchAngle
             lastTime = now
@@ -153,6 +158,7 @@ final class SpinnerViewController: UIViewController {
         let deltaAngle = omega * dt
         angle += deltaAngle
         applyRotation(angle)
+        feedbackController.consumeRotation(abs(deltaAngle), omega: omega, timestamp: link.targetTimestamp)
     }
 
     // MARK: - Helpers
